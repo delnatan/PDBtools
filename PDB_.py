@@ -3,7 +3,6 @@ from saxs_mod import compute_intensity
 import json
 import os
 localpath = os.path.dirname(os.path.realpath(__file__)) + '/'
-
 # # (atomlabel,self.number,self.atomname,self.resname,\
 #             self.chain,self.resnum,self.alternate,self.x,self.y,self.z,\
 #             self.occ,self.Bfactor,self.elem,self.charge)
@@ -15,7 +14,7 @@ pdbfmt = "%-6s%5d %4s%1s%3s %1s%4d%1s   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s%2
 aa3 = {'ALA':'A','CYS':'C','ASP':'D','GLU':'E','PHE':'F',\
     'GLY':'G','HIS':'H','ILE':'I','LYS':'K','LEU':'L','MET':'M',\
     'ASN':'N','PRO':'P','GLN':'Q','ARG':'R','SER':'S','THR':'T',\
-    'VAL':'V','TRP':'W','TYR':'Y','MSE':'M'}
+    'VAL':'V','TRP':'W','TYR':'Y','MSE':'M','GLD':'X'}
 
 # zero form factor
 FF0 = {
@@ -78,15 +77,13 @@ class PDB:
                     alternate=d[16:17],resname=d[17:20],chain=d[21:22],\
                     resnum=int(d[22:26]),x=float(d[30:38]),y=float(d[38:46]),\
                     z=float(d[46:54]),occ=float(d[54:60]),Bfactor=float(d[60:66]),\
-                    element=d[76:78],charge=d[78:80])     
-                atm.accountFF0()           
+                    element=d[76:78],charge=d[78:80])        
             elif d.startswith('HETATM'):
                 atm = Atom(hetatm=True, number=int(d[6:11]), name=d[12:16],\
                     alternate=d[16:17],resname=d[17:20],chain=d[21:22],\
                     resnum=int(d[22:26]),x=float(d[30:38]),y=float(d[38:46]),\
                     z=float(d[46:54]),occ=float(d[54:60]),Bfactor=float(d[60:66]),\
                     element=d[76:78],charge=d[78:80])   
-                atm.accountFF0()     
             if atm.chain not in self.chains:
                 self.chains.append(atm.chain)
             self.atoms.append(atm)
@@ -165,12 +162,8 @@ class PDB:
         self.r = r
         self.Pr= Pr
         
-    def write(self, filename, chain):
-        sel = [s for s in self.atoms if s.chain==chain and s.het==False]
-        with open(filename,'wt') as f:
-            for s in sel:
-                f.write(s.__str__() + "\n")
-        print "Successfully written Chain {:s} into {:s}".format(chain, filename)
+    def write(self, filename):
+        return False
 
 
 class Atom:
@@ -192,9 +185,8 @@ class Atom:
         self.resname=resname.strip()
         self.resnum =resnum
         self.boundH =0
-        # self.accountH()
-        self.ff0 = 6.9946 # default is Nitrogen.
-        self.vexc= 2.49
+        self.ff0  = None
+        self.vexc = None
         self.accountFF0() # compute net form factor
 
     def __str__(self):
@@ -250,48 +242,43 @@ class Atom:
         else:
             self.boundH= 0
             self.vexc  = 0
-            self.vexc  =0
 
     def accountFF0(self):
+        self.accountH()
         if self.atomname not in ['C','N','O','P','S','H']:
             try:
-                self.boundH = Hdict[self.resname][self.atomname]
-                if self.elem=='C':
-                    if self.boundH==1:
-                        self.ff0 = FF0net["CH1"]
-                    elif self.boundH==2:
-                        self.ff0 = FF0net["CH2"]
-                    elif self.boundH==3:
-                        self.ff0 = FF0net["CH3"]
-                if self.elem=='N':
-                    if self.Hbound==1:
-                        self.ff0 = FF0net["NH"]
-                    elif self.Hbound==2:
-                        self.ff0 = FF0net["NH2"]
-                    elif self.Hbound==3:
-                        self.ff0 = FF0net["NH3"]
-                if self.elem=='O':
-                    if self.Hbound==2:
-                        self.ff0 = FF0net["OH2"]
-                    if self.Hbound==1:
-                        self.ff0 = FF0net["OH"]
-                if self.elem=='S':
-                    if self.Hbound==1:
-                        self.ff0 = FF0net["SH"]
+                if self.atomname in FF0net:
+                    # print "Atom found {:s}".format(self.atomname)
+                    self.ff0  = FF0net[self.atomname]
+                    self.boundH = 0
+                else:
+                    self.boundH = Hdict[self.resname][self.atomname]
+                    if self.elem=='C':
+                        if self.boundH==1:
+                            self.ff0 = FF0net["CH1"]
+                        elif self.boundH==2:
+                            self.ff0 = FF0net["CH2"]
+                        elif self.boundH==3:
+                            self.ff0 = FF0net["CH3"]
+                    if self.elem=='N':
+                        if self.Hbound==1:
+                            self.ff0 = FF0net["NH"]
+                        elif self.Hbound==2:
+                            self.ff0 = FF0net["NH2"]
+                        elif self.Hbound==3:
+                            self.ff0 = FF0net["NH3"]
+                    if self.elem=='O':
+                        if self.Hbound==2:
+                            self.ff0 = FF0net["OH2"]
+                        if self.Hbound==1:
+                            self.ff0 = FF0net["OH"]
+                    if self.elem=='S':
+                        if self.Hbound==1:
+                            self.ff0 = FF0net["SH"]
             except:
+                self.ff0 = FF0net[self.elem]
                 self.boundH=0
-        elif self.atomname in FF0net:
-            self.ff0  = FF0net[self.atomname]
-            self.boundH = 0
         else:
-            try:
-                fixname = self.atomname
-                fixname[1]=fixname[1].lower()
-                self.ff0 = FF0net[self.fixname]
-            except:
-                print "Atom name {s} is not recognized".format(self.atomname)
-                self.ff0   = 6.9946
-                self.boundH= 0
-                self.vexc  = 2.49
+            self.ff0 = FF0net[self.elem]
 
             
