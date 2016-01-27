@@ -280,8 +280,14 @@ class Atom:
                         if self.Hbound==1:
                             self.ff0 = FF0net["SH"]
             except:
-                self.ff0 = FF0net[self.elem]
-                self.boundH=0
+                try:
+                    self.ff0 = FF0net[self.elem]
+                    self.boundH=0
+                except:
+                    fixname = self.elem
+                    fixelem = fixname[0] + fixname[1].lower()
+                    self.ff0 = FF0net[fixelem]
+                    self.boundH=0
         else:
             self.ff0 = FF0net[self.elem]
 
