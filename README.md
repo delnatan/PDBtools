@@ -1,3 +1,10 @@
+# Compiling the Fortran module
+You need Numpy installed with a fortran compiler to compile saxs_mod.f90.
+
+``` bash
+f2py -c saxs_mod.f90 -m saxs_mod
+```
+
 # PDBtools
 Simple python tools to read/write PDB files
 
