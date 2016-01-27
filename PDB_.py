@@ -162,8 +162,12 @@ class PDB:
         self.r = r
         self.Pr= Pr
         
-    def write(self, filename):
-        return False
+    def write(self, filename, chain):
+        sel = [s for s in self.atoms if s.chain==chain and s.het==False]
+        with open(filename,'wt') as f:
+            for s in sel:
+                f.write(s.__str__() + "\n")
+        print "Successfully written Chain {:s} into {:s}".format(chain, filename)
 
 
 class Atom:
