@@ -1,5 +1,5 @@
 # Compiling the Fortran module
-You need Numpy installed with a fortran compiler to compile saxs_mod.f90.
+You need Numpy installed with a fortran compiler to compile saxs_mod.f90 using f2py.
 
 ``` bash
 f2py -c saxs_mod.f90 -m saxs_mod
