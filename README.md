@@ -1,7 +1,7 @@
 # PDBtools
 Simple python tools to read/write PDB files
 
-Example of use:
+Example of use (for SAXS calculations)
 
 ``` Python
 from PDBtools.PDB_ import PDB
