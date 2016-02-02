@@ -1,5 +1,6 @@
-from numpy import array, arange, outer, sin
+from numpy import array, arange, outer, sin, loadtxt
 from saxs_mod import compute_intensity
+from scipy.optimize import minimize
 import json
 import os
 localpath = os.path.dirname(os.path.realpath(__file__)) + '/'
@@ -14,7 +15,7 @@ pdbfmt = "%-6s%5d %4s%1s%3s %1s%4d%1s   %8.3f%8.3f%8.3f%6.2f%6.2f          %2s%2
 aa3 = {'ALA':'A','CYS':'C','ASP':'D','GLU':'E','PHE':'F',\
     'GLY':'G','HIS':'H','ILE':'I','LYS':'K','LEU':'L','MET':'M',\
     'ASN':'N','PRO':'P','GLN':'Q','ARG':'R','SER':'S','THR':'T',\
-    'VAL':'V','TRP':'W','TYR':'Y','MSE':'M','GLD':'X'}
+    'VAL':'V','TRP':'W','TYR':'Y','MSE':'M','GLD':'X','AuX':'X', 'UNK': '.'}
 
 # zero form factor
 FF0 = {
@@ -41,7 +42,17 @@ FF0net = {
 Vexc = {
     "H": 5.15, "C": 16.44, "N": 2.49, "O":9.13, "S": 19.86, "P": 5.73,\
     "Au":19.86, "Se": 9.0, "Na": 6.538, "K": 14.71, "CH": 21.59, "CH2": 26.74,\
-    "CH3":31.89, "NH": 7.64, "NH2": 12.79, "NH3":17.94, "OH":14.28,"SH":25.1
+    "CH3":31.89, "NH": 7.64, "NH2": 12.79, "NH3":17.94, "OH":14.28,"SH":25.1,\
+    "Cl": 22.45, "Mg": 21.69, "Ca": 51.63
+}
+
+# VDW radius for atoms
+# V = 4/3 * pi * r^3
+# r^3 = V * 3/(4 * pi)  
+rads = {
+    "C":1.7,"N":1.55,"O":1.52,"F":1.47,"P":1.8,"S":1.8,"Cl":1.75,\
+    "H":1.07,"Cu":1.4,"K":2.75,"Na":2.27, "Mg":1.73, "Co":2.0, "Au": 1.66,\
+    "He": 1.4, "Hg": 1.55, "Ni":1.63, "Li":1.82, "Br":1.85, "I":1.98, "Pb":2.02
 }
 # Dictionary for number of hydrogen bound per atom type
 with open(localpath+'pdbHbound_dict.json','rt') as f:
@@ -51,16 +62,19 @@ class PDB:
     def __init__(self, filename=None):
         self.residues = None
         self.atoms    = None
+        self.Natoms   = 0
         self.residues = dict()
         self.chains   = []
         self.r        = None
         self.Pr       = None
         self.Iq       = None
         self.beamprofile = None
+        self.saxscalc = False # flag for SAXS calculation
         if filename is None:
-            self.filename = 'File is not specified.'
+            self.filename = 'File is not specified. Creating a new PDB object'
         else:
             self.read(filename)
+        self.calcCofM() # compute the center of mass
 
     def read(self, filename):
         self.filename = filename
@@ -88,14 +102,19 @@ class PDB:
                 self.chains.append(atm.chain)
             self.atoms.append(atm)
 
+        self.Natoms = len(self.atoms)
         # get sequence from PDB
         self.parse_sequence()
         
 
     def parse_sequence(self):
         if self.atoms is not None:
-            seqpair = [(s.resnum, s.resname, s.chain) for s in self.atoms\
-                 if s.resname in aa3]
+            try:
+                seqpair = [(s.resnum, s.resname, s.chain) for s in self.atoms\
+                     if s.resname in aa3]
+            except:
+                print "Residue name is not recognized."
+                
             for chain in self.chains: # do per chain
                 # only get protein-only residues
                 unique_res = []
@@ -113,6 +132,7 @@ class PDB:
                 res_range = range(1,resmax+1)
                 residues = []
                 counter = 0
+
                 for i in res_range:
                     if unique_res[counter][0]!=i:
                         residues.append('-')
@@ -146,28 +166,167 @@ class PDB:
         y   = xyz[:,1]
         z   = xyz[:,2]
         fflist=xyz[:,3]
-        Iq,Nr = compute_intensity(self.q,x,y,z,fflist)
+
+        if 'beamprofile' in kwargs:
+            beamfn = kwargs['beamprofile']
+            beamdat = readPDH(beamfn)
+            beamdat = beamdat[:,:2] # get only first two columns
+            # and normalize so that integral of beam is 0.5
+            beamdat[:,0] *= 0.1
+            dy = beamdat[1,0] - beamdat[0,0]
+            beamdat[:,1] = 0.5*(beamdat[:,1]/(beamdat[:,1].sum() * dy))
+            # convert unit to angstrom
+            
+            Iq,Nr = compute_intensity(self.q,x,y,z,fflist,beamdat)
+        else:
+            beamdat = array([[1,1],[1,1]]) # dummy input for fortran program
+            Iq,Nr = compute_intensity(self.q,x,y,z,fflist,beamdat)
+
         r = arange(0,Nr*dr,dr)
 
         if self.q[0]==0.0:
             self.Iq = Iq/Iq[0]
         else:
-            print "Not supported yet"
+            self.Iq = Iq/Iq[0]
 
         # then convert to P(r)
         qr = outer(self.q,r)
         Iq = Iq - Iq.min()
         Iq = Iq/Iq.max()
+
         Pr = Iq.dot(qr * sin(qr) * dq)
+
+        # consider removing this if you have some smearing
         self.r = r
         self.Pr= Pr
+
+        self.saxscalc = True
+
+    def addAtom(self, **kwargs):        
+        if self.atoms is None:
+            self.atoms = []
+        self.Natoms += 1
+        newatom = Atom(number=self.Natoms,**kwargs)
+        self.atoms.append(newatom)       
         
-    def write(self, filename, chain):
+    def writeChain(self, filename, chain):
         sel = [s for s in self.atoms if s.chain==chain and s.het==False]
         with open(filename,'wt') as f:
             for s in sel:
                 f.write(s.__str__() + "\n")
         print "Successfully written Chain {:s} into {:s}".format(chain, filename)
+
+    def save(self, filename):
+        with open(filename,'wt') as f:
+            for s in self.atoms:
+                f.write(s.__str__() + "\n")
+        print "Successfully written PDB into {:s}".format(filename)
+
+    def boundingBox(self, padding=10.0):
+        if self.atoms is not None:
+            coords = array([(a.x,a.y,a.z) for a in self.atoms])
+            xmin,xmax = (coords[:,0].min(), coords[:,0].max())
+            ymin,ymax = (coords[:,1].min(), coords[:,1].max())
+            zmin,zmax = (coords[:,2].min(), coords[:,2].max())
+            return ((xmin-padding,xmax+padding), (ymin-padding,ymax+padding),\
+             (zmin-padding,zmax+padding))
+
+    def fitSAXS(self, q_obs, Iq_obs, sd_obs, p0=[0.1,1e-4], beamprofile=None):
+        # create a local function to return Chi^2
+        def chisq(par,obs,calc,sd):
+            s = par[0]
+            b = par[1]
+            Nobs = obs.size
+            scalc = s*calc + b # computed profile
+            chi2  = (obs - scalc)**2 / sd**2
+            return chi2.sum()/Nobs
+        
+        if not self.saxscalc:
+            # compute profiles if not yet
+            if beamprofile is not None:
+                self.calc_profiles(q=q_obs, beamprofile=beamprofile)
+            else:
+                self.calc_profiles(q=q_obs)
+
+            calc = self.Iq
+            opt = minimize(chisq, p0, args=(Iq_obs,calc,sd_obs,),method='L-BFGS-B')
+        
+        elif self.saxscalc:
+            opt = minimize(chisq, p0, args=(Iq_obs,calc,sd_obs,),method='L-BFGS-B')
+
+        print "Chi-sq value {:7.3f}".format(opt.fun)
+
+        self.saxs_scale = opt.x[0]
+        self.saxs_bg    = opt.x[1]
+
+        return opt.fun
+
+    def calcCofM(self):
+        # computes the center of mass of atom
+        xyz = [(a.x,a.y,a.z) for a in self.atoms]
+        xyz = array(xyz)
+        self.center = xyz.mean(axis=0)
+        self.ch_centers = dict()
+        for c in self.chains:
+            wrkatoms = [(a.x,a.y,a.z) for a in self.atoms if a.chain==c]
+            wrkatoms = array(wrkatoms)
+            self.ch_centers[c] = wrkatoms.mean(axis=0)
+
+    def translate(self,dx=0,dy=0,dz=0):
+        # move entire PDB by dx,dy,dz
+        for a in self.atoms:
+            a.x += dx
+            a.y += dy
+            a.z += dz
+        return True
+
+    def nextChain(self):
+        alphabets = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        takenchains = ''.join(self.chains)
+        Nchains = len(takenchains)
+        return alphabets[Nchains]
+
+    def addPDB(self,PDBadd,x=0.0,y=0.0,z=0.0):
+        # PDBadd is the PDB wished to be placed and appended to the current
+        # PDB at position (x,y,z) by its center of mass
+
+        # figure out how much to move
+        dx = x-PDBadd.center[0]
+        dy = y-PDBadd.center[1]
+        dz = z-PDBadd.center[2]
+
+        PDBadd.translate(dx,dy,dz)
+        # figure out what chains exists in current PDB
+        nc = self.nextChain()
+
+        # and append a new chain to this structure
+        i = 3
+        for a in PDBadd.atoms:
+            a.chain = nc
+            a.number= self.Natoms + i
+            i += 1
+
+        for a in PDBadd.atoms:
+            self.atoms.append(a)
+        
+        self.chains.append(nc)
+
+        print "PDB successfully appended as chain %s" % (nc)
+
+    def moveChain(self,chainID,xtarg,ytarg,ztarg):
+        # assuming chain is on the origin !!!
+        # get center of mass of chainID
+        self.calcCofM() # compute center of mass
+        cofm = self.ch_centers[chainID]
+        dx = xtarg - cofm[0]
+        dy = ytarg - cofm[1]
+        dz = ztarg - cofm[2]
+
+        for a in self.atoms:
+            if (a.chain=='C'):
+                a.x += dx
+                a.y += dy
+                a.z += dz
 
 
 class Atom:
@@ -191,6 +350,16 @@ class Atom:
         self.boundH =0
         self.ff0  = None
         self.vexc = None
+        fixname = self.elem
+        # fix upper case
+        if len(self.elem)==2:
+            fixname = fixname[0] + fixname[1].lower()
+        # look up radius   
+        try:
+            self.radius=rads[fixname]
+        except KeyError:
+            print "Element {:s} doesn't have a radius assigned".format(self.elem)
+            self.radius = 1.6
         self.accountFF0() # compute net form factor
 
     def __str__(self):
@@ -206,11 +375,10 @@ class Atom:
     def accountH(self):
         # right now only supports Protein
         # implement Nucleic Acid later
-        # Carbon atom types
         if self.atomname not in ['C','N','O','P','S','H']:
             try:
                 self.boundH = Hdict[self.resname][self.atomname]
-                if self.elem=='C':
+                if self.elem=='C': # Carbon atom types
                     if self.boundH==1:
                         self.vexc = Vexc["CH"]
                     elif self.boundH==2:
@@ -219,7 +387,7 @@ class Atom:
                         self.vexc = Vexc["CH3"]
                     else:
                         self.vexc = Vexc[self.elem]
-                if self.elem=='N':
+                if self.elem=='N': # Nitrogen atom types
                     if self.Hbound==1:
                         self.vexc = Vexc["NH"]
                     elif self.Hbound==2:
@@ -228,7 +396,7 @@ class Atom:
                         self.vexc = Vexc["NH3"]
                     else:
                         self.vexc = Vexc[self.elem]
-                if self.elem=='O':
+                if self.elem=='O': # Oxygen atom types
                     if self.Hbound==1:
                         self.vexc = Vexc["OH"]
                     else:
@@ -291,4 +459,21 @@ class Atom:
         else:
             self.ff0 = FF0net[self.elem]
 
-            
+def readPDH(fn):
+    try:
+        with open(fn,'rt') as f:
+            dat = f.readlines()
+        beamdat = []
+        if dat[1].startswith('SAXS'): #PDH file
+            Npts = int(dat[2].split()[0])
+            for i in range(5,Npts+1):
+                tmp = [float(d) for d in dat[i].split()]
+                beamdat.append(tmp)
+            beamdat = array(beamdat)
+        else:
+            beamdat = loadtxt(fn)
+    except:
+        print "File %s not found."%(fn)
+        beamdat = False
+
+    return beamdat
