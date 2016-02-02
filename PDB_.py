@@ -74,7 +74,8 @@ class PDB:
             self.filename = 'File is not specified. Creating a new PDB object'
         else:
             self.read(filename)
-        self.calcCofM() # compute the center of mass
+        if self.atoms is not None:
+            self.calcCofM() # compute the center of mass
 
     def read(self, filename):
         self.filename = filename
@@ -323,7 +324,7 @@ class PDB:
         dz = ztarg - cofm[2]
 
         for a in self.atoms:
-            if (a.chain=='C'):
+            if (a.chain==chainID):
                 a.x += dx
                 a.y += dy
                 a.z += dz

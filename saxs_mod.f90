@@ -50,8 +50,8 @@ subroutine compute_intensity(q,x,y,z,ff0,Natoms,Iq,Nq,Nr,beamprofile,Ny)
         end do
     end do
 
-!     write (*,101) Dmax
-! 101 format("Dmax = ",f6.2)
+     write (*,101) Dmax
+ 101 format("Dmax = ",f6.2)
 
     ! perform fourier transform and add auto-correlation part
     Nr = int( (Dmax-mod(Dmax,dr))/dr ) + 1
